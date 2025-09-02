@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>IAC Block GUI - Tiny</title>
+<style>
+  body { margin:0; background:#2b2b2b; }
+  #canvas {
+    width:100vw;
+    height:100vh;
+    position:relative;
+    background:#303030;
+    overflow:hidden;
+  }
+  .block {
+    position:absolute;
+    display:flex;
+    align-items:center;
+    border-radius:10px;
+    box-shadow:1px 1px 2px rgba(0,0,0,0.4);
+    cursor:grab;
+    user-select:none;
+    height:16px;
+    font-size: 10px;
+  }
+  .number-part {
+    background:#111;
+    color:#fff;
+    padding:0 4px;
+    border-top-left-radius:10px;
+    border-bottom-left-radius:10px;
+    text-align:center;
+    flex-shrink:0;
+  }
+  .word-part {
+    background:gold;
+    color:#000;
+    padding:0 6px;
+    border-top-right-radius:10px;
+    border-bottom-right-radius:10px;
+    min-width:2ch;
+  }
+  .done-btn {
+    display:none;
+    margin-left:3px;
+    padding:1px 3px;
+    background:#fff;
+    color:#000;
+    font-size:0.6em;
+    border-radius:2px;
+    cursor:pointer;
+  }
+  .option-menu {
+    position:absolute;
+    background:#444;
+    color:#fff;
+    padding:3px;
+    border-radius:3px;
+    z-index:1000;
+    font-size: 10px;
+  }
+  .option-menu div {
+    padding:1px 3px;
+    cursor:pointer;
+  }
+  .option-menu div:hover {
+    background:#666;
+  }
+</style>
+</head>
+<body>
+<div id="canvas"></div>
+
+<script>
+// ===================== Numbering =====================
+let usedNumbers = new Set();
+
+function registerNumber(num) {
+  usedNumbers.add(Number(num));
+}
+
+function deregisterNumber(num) {
+  usedNumbers.delete(Number(num));
+}
+
+function getNextNumber() {
+  if (usedNumbers.size === 0) return '1';
+  const maxNum = Math.max(...usedNumbers);
+  const next = maxNum + 1;
+  usedNumbers.add(next);
+  return next.toString();
+}
+
+// ===================== Blocks =====================
+const canvas = document.getElementById('canvas');
+let copyBlockData = null;
+
+function createBlock(wordText='WORD', numberText='', x=50, y=50){
+  const blockNumber = numberText || getNextNumber();
+
+  const block = document.createElement('div');
+  block.classList.add('block');
+  block.style.left = x+'px';
+  block.style.top  = y+'px';
+  
+  const number = document.createElement('div');
+  number.classList.add('number-part');
+  number.innerText = blockNumber;
+
+  const words = document.createElement('div');
+  words.classList.add('word-part');
+  words.innerText = wordText;
+
+  const doneBtn = document.createElement('div');
+  doneBtn.classList.add('done-btn');
+  doneBtn.innerText = 'Done';
+
+  block.appendChild(number);
+  block.appendChild(words);
+  block.appendChild(doneBtn);
+  canvas.appendChild(block);
+
+  registerNumber(blockNumber);
+
+  // ---- Dragging ----
+  let isDragging=false, offsetX, offsetY;
+  block.addEventListener('mousedown',(e)=>{
+    if(e.button!==2 && !words.isContentEditable && !number.isContentEditable && e.target!==doneBtn){
+      isDragging=true;
+      offsetX=e.offsetX;
+      offsetY=e.offsetY;
+      block.style.cursor='grabbing';
+    }
+  });
+  canvas.addEventListener('mousemove',(e)=>{
+    if(isDragging){
+      block.style.left = e.clientX-offsetX+'px';
+      block.style.top  = e.clientY-offsetY+'px';
+    }
+  });
+  document.addEventListener('mouseup',()=>{
+    isDragging=false;
+    block.style.cursor='grab';
+  });
+
+  // ---- Word Editing ----
+  function startWordEdit(){
+    doneBtn.style.display='inline';
+    words.contentEditable=true;
+    words.focus();
+  }
+  doneBtn.addEventListener('click',(e)=>{
+    e.stopPropagation();
+    words.contentEditable=false;
+    doneBtn.style.display='none';
+  });
+
+  // ---- Number Editing ----
+  let prevNumberValue = number.innerText;
+  number.addEventListener('dblclick',(e)=>{
+    e.stopPropagation();
+    prevNumberValue = number.innerText;
+    number.contentEditable=true;
+    number.focus();
+  });
+
+  function finishNumberEdit(){
+    if(!number.isContentEditable) return;
+    number.contentEditable=false;
+
+    const raw = number.innerText.trim();
+    const newNum = Number(raw.replace(/[^\d]/g,''));
+    const oldNum = Number(prevNumberValue);
+
+    if(!Number.isFinite(newNum) || raw===''){
+      number.innerText = prevNumberValue;
+      return;
+    }
+
+    if(newNum === oldNum){
+      number.innerText = String(oldNum);
+      return;
+    }
+
+    deregisterNumber(oldNum);
+
+    if(usedNumbers.has(newNum)){
+      const fixed = getNextNumber();
+      number.innerText = fixed;
+    }else{
+      number.innerText = String(newNum);
+      registerNumber(newNum);
+    }
+  }
+
+  canvas.addEventListener('click',finishNumberEdit);
+  number.addEventListener('keydown',(e)=>{
+    if(e.key==='Enter'){
+      e.preventDefault();
+      finishNumberEdit();
+    }
+  });
+
+  // ---- Right Click Menu ----
+  block.addEventListener('contextmenu',(e)=>{
+    e.preventDefault();
+    const menu=document.createElement('div');
+    menu.classList.add('option-menu');
+    menu.style.left=e.clientX+'px';
+    menu.style.top =e.clientY+'px';
+    menu.innerHTML='<div id="edit">Edit</div><div id="copy">Copy</div><div id="delete">Delete</div>';
+    document.body.appendChild(menu);
+
+    function removeMenu(){ menu.remove(); document.removeEventListener('click', removeMenu); }
+    document.addEventListener('click', removeMenu);
+
+    menu.querySelector('#edit').addEventListener('click',()=>{
+      startWordEdit();
+      removeMenu();
+    });
+    menu.querySelector('#copy').addEventListener('click',()=>{
+      copyBlockData={word:words.innerText};
+      removeMenu();
+    });
+    menu.querySelector('#delete').addEventListener('click',()=>{
+      deregisterNumber(number.innerText);
+      block.remove();
+      removeMenu();
+    });
+  });
+}
+
+// ===================== Canvas =====================
+canvas.addEventListener('contextmenu',(e)=>{
+  if(e.target===canvas){
+    e.preventDefault();
+    const menu=document.createElement('div');
+    menu.classList.add('option-menu');
+    menu.style.left=e.clientX+'px';
+    menu.style.top =e.clientY+'px';
+    menu.innerHTML='<div id="paste">Paste</div><div id="cancel">Cancel</div>';
+    document.body.appendChild(menu);
+
+    function removeMenu(){ menu.remove(); document.removeEventListener('click', removeMenu); }
+    document.addEventListener('click', removeMenu);
+
+    menu.querySelector('#paste').addEventListener('click',()=>{
+      if(copyBlockData){
+        createBlock(copyBlockData.word, '', e.clientX, e.clientY);
+      }
+      removeMenu();
+    });
+    menu.querySelector('#cancel').addEventListener('click',removeMenu);
+  }
+});
+
+// ===================== Initial Block =====================
+createBlock('BLOCK', '', 100,100);
+</script>
+</body>
+</html>
