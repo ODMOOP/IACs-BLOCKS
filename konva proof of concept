@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Konva Curve + Zoom + Middle Mouse Pan</title>
+<title>Bezier Curve Anchored Ends with Gradient Stroke</title>
 <style>
   body { margin:0; background:#2b2b2b; overflow:hidden; }
   #canvas { width:100vw; height:100vh; background:#303030; }
@@ -16,102 +16,100 @@ const stage = new Konva.Stage({
   container: 'canvas',
   width: window.innerWidth,
   height: window.innerHeight,
-  draggable: false // we'll enable only during middle button drag
+  draggable: false
 });
 const layer = new Konva.Layer();
 stage.add(layer);
 
-// two ports
-const source = new Konva.Circle({ x:100, y:200, radius:8, fill:'orange', name:'port-src' });
-const dest   = new Konva.Circle({ x:300, y:200, radius:8, fill:'white',  name:'port-dest' });
-layer.add(source, dest);
+const curveGroup = new Konva.Group({
+  x: stage.width() / 2,
+  y: stage.height() / 2
+});
+layer.add(curveGroup);
 
-let activeLine = null;
-let startPort = null;
-
-// curve creation
-source.on('mousedown', (e) => {
-  if (e.evt.button !== 0) return; // only left click
-  startPort = source;
-  const p = startPort.getAbsolutePosition();
-
-  activeLine = new Konva.Line({
-    points: [p.x,p.y,p.x,p.y],
-    stroke: 'orange',
-    strokeWidth: 2,
-    bezier: true
-  });
-  layer.add(activeLine);
-  layer.draw();
-
-  stage.on('mousemove.curve', () => {
-    if (!activeLine) return;
-    const p1 = startPort.getAbsolutePosition();
-    const p2 = stage.getPointerPosition();
-    updateCurve(p1,p2);
-    layer.batchDraw();
-  });
-
-  stage.on('mouseup.curve', () => {
-    stage.off('mousemove.curve');
-    stage.off('mouseup.curve');
-    if (!activeLine) return;
-    const dp = dest.getAbsolutePosition();
-    const mp = stage.getPointerPosition();
-    if (Math.hypot(dp.x-mp.x, dp.y-mp.y) < 20) {
-      updateCurve(startPort.getAbsolutePosition(), dp);
-    } else {
-      activeLine.destroy();
-    }
-    activeLine = null;
-    layer.draw();
-  });
+// Endpoints
+const startCircle = new Konva.Circle({
+  x: -150, y: 0, radius: 8,
+  fill: 'orange', stroke: 'black', strokeWidth: 1,
+  draggable: true
+});
+const endCircle = new Konva.Circle({
+  x: 150, y: 0, radius: 8,
+  fill: 'white', stroke: 'black', strokeWidth: 1,
+  draggable: true
 });
 
-function updateCurve(p1,p2){
-  const cp1x=p1.x, cp1y=(p1.y+p2.y)/2;
-  const cp2x=p2.x, cp2y=(p1.y+p2.y)/2;
-  activeLine.points([p1.x,p1.y,cp1x,cp1y,cp2x,cp2y,p2.x,p2.y]);
+// Curve (drawn first so it's behind circles)
+const curve = new Konva.Line({
+  points: [],
+  strokeWidth: 3,
+  bezier: true
+});
+curveGroup.add(curve);
+curveGroup.add(startCircle);
+curveGroup.add(endCircle);
+
+// Update function with anchored control points + gradient stroke
+function updateCurve() {
+  const sx = startCircle.x();
+  const sy = startCircle.y();
+  const ex = endCircle.x();
+  const ey = endCircle.y();
+
+  const offset = 80;
+
+  const cp1x = sx + offset;
+  const cp1y = sy;
+
+  const cp2x = ex - offset;
+  const cp2y = ey;
+
+  // update curve points
+  curve.points([sx, sy, cp1x, cp1y, cp2x, cp2y, ex, ey]);
+
+  // update gradient stroke from start (orange) to end (white)
+  curve.strokeLinearGradientStartPoint({ x: sx, y: sy });
+  curve.strokeLinearGradientEndPoint({ x: ex, y: ey });
+  curve.strokeLinearGradientColorStops([0, 'orange', 1, 'white']);
+
+  layer.batchDraw();
 }
 
-// zoom with wheel
-stage.on('wheel',(e)=>{
+startCircle.on('dragmove', updateCurve);
+endCircle.on('dragmove', updateCurve);
+
+// Initial draw
+updateCurve();
+layer.draw();
+
+// Zoom
+stage.on('wheel', (e) => {
   e.evt.preventDefault();
-  const scaleBy=1.05;
-  const oldScale=stage.scaleX();
-  const pointer=stage.getPointerPosition();
-  const mousePointTo={
-    x:(pointer.x-stage.x())/oldScale,
-    y:(pointer.y-stage.y())/oldScale
+  const scaleBy = 1.05;
+  const oldScale = stage.scaleX();
+  const pointer = stage.getPointerPosition();
+  const mousePointTo = {
+    x: (pointer.x - stage.x()) / oldScale,
+    y: (pointer.y - stage.y()) / oldScale
   };
-  const dir=e.evt.deltaY>0?-1:1;
-  const newScale=dir>0?oldScale*scaleBy:oldScale/scaleBy;
-  stage.scale({x:newScale,y:newScale});
+  const dir = e.evt.deltaY > 0 ? -1 : 1;
+  const newScale = dir > 0 ? oldScale * scaleBy : oldScale / scaleBy;
+  stage.scale({ x: newScale, y: newScale });
   stage.position({
-    x:pointer.x-mousePointTo.x*newScale,
-    y:pointer.y-mousePointTo.y*newScale
+    x: pointer.x - mousePointTo.x * newScale,
+    y: pointer.y - mousePointTo.y * newScale
   });
   stage.batchDraw();
 });
 
-// pan with middle mouse drag
-let isPanning=false;
-let lastPos=null;
-
-stage.on('mousedown',(e)=>{
-  if(e.evt.button===1){ // middle mouse
-    isPanning=true;
-    stage.draggable(true);
-    lastPos=stage.getPointerPosition();
-  }
+// Pan with middle mouse drag
+stage.on('mousedown', (e) => {
+  if (e.evt.button === 1) stage.draggable(true);
 });
-stage.on('mouseup',(e)=>{
-  if(e.evt.button===1){
-    isPanning=false;
-    stage.draggable(false);
-  }
+stage.on('mouseup', (e) => {
+  if (e.evt.button === 1) stage.draggable(false);
 });
-stage.getContainer().addEventListener('contextmenu',(e)=>e.preventDefault());
+stage.getContainer().addEventListener('contextmenu', (e) => e.preventDefault());
 </script>
 </body>
 </html>
