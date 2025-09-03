@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>IAC Block GUI - Curves Fixed</title>
+<style>
+  body { margin:0; background:#2b2b2b; }
+  #canvas { width:100vw; height:100vh; position:relative; background:#303030; overflow:hidden; }
+  .block {
+    position:absolute; display:flex; align-items:center;
+    border-radius:4px; cursor:grab; user-select:none;
+    height:8px; font-size:6px;
+  }
+  .number-part { background:#111; color:#fff; padding:0 2px; border-top-left-radius:4px; border-bottom-left-radius:4px; flex-shrink:0; }
+  .word-part { background:gold; color:#000; padding:0 3px; border-top-right-radius:4px; border-bottom-right-radius:4px; min-width:2ch; }
+  .done-btn { display:none; margin-left:2px; height:8px; line-height:8px; padding:0 3px; background:#fff; color:#000; font-size:6px; border-radius:2px; cursor:pointer; }
+  .option-menu { position:absolute; background:#444; color:#fff; padding:2px; border-radius:3px; z-index:1000; font-size:6px; }
+  .option-menu div { padding:1px 2px; cursor:pointer; }
+  .option-menu div:hover { background:#666; }
+  .node { position:absolute; bottom:-3px; left:50%; transform:translateX(-50%); width:6px; height:3px; background:orange; border-radius:0 0 6px 6px; cursor:pointer; }
+  .node-top { position:absolute; top:-3px; left:50%; transform:translateX(-50%); width:6px; height:3px; background:white; border-radius:6px 6px 0 0; }
+  .cursor-circle { position:fixed; width:6px; height:6px; border-radius:50%; background:orange; pointer-events:none; z-index:2000; }
+  svg.curve-layer { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; overflow:visible; }
+  svg path { stroke:orange; stroke-width:1; fill:none; pointer-events:visibleStroke; }
+  .curve-highlight { stroke-width:3 !important; }
+  .curve-confirm { position:fixed; background:#222; color:#fff; border:1px solid #555; padding:4px; font-size:10px; border-radius:4px; z-index:3000; }
+  .curve-confirm button { margin:2px; font-size:10px; }
+</style>
+</head>
+<body>
+<div id="canvas"></div>
+<svg class="curve-layer"><defs id="gradDefs"></defs></svg>
+
+<script>
+let usedNumbers=new Set();
+function registerNumber(num){usedNumbers.add(Number(num));}
+function deregisterNumber(num){usedNumbers.delete(Number(num));}
+function getNextNumber(){ if(usedNumbers.size===0) return '1'; const max=Math.max(...usedNumbers); const next=max+1; usedNumbers.add(next); return next.toString(); }
+
+const canvas=document.getElementById('canvas');
+const curveLayer=document.querySelector('.curve-layer');
+const gradDefs=document.getElementById('gradDefs');
+let curves=[];
+
+// --------- curve helpers ----------
+function drawCurve(path,x1,y1,x2,y2){
+  const cp1X=x1, cp1Y=(y1+y2)/2;
+  const cp2X=x2, cp2Y=(y1+y2)/2;
+  path.setAttribute('d',`M ${x1},${y1} C ${cp1X},${cp1Y} ${cp2X},${cp2Y} ${x2},${y2}`);
+}
+function redrawCurves(){
+  curves.forEach(c=>{
+    const r1=c.startNode.getBoundingClientRect(), r2=c.endNode.getBoundingClientRect();
+    drawCurve(c.path,r1.left+r1.width/2,r1.top+r1.height/2,r2.left+r2.width/2,r2.top+r2.height/2);
+  });
+}
+function deleteCurve(c){
+  c.path.remove(); curves=curves.filter(cc=>cc!==c);
+}
+function attachCurveEvents(curveObj){
+  const path=curveObj.path;
+  path.addEventListener('mouseenter',()=> path.classList.add('curve-highlight'));
+  path.addEventListener('mouseleave',()=> path.classList.remove('curve-highlight'));
+  path.addEventListener('contextmenu',e=>{ e.preventDefault(); deleteCurve(curveObj); });
+  path.addEventListener('click',e=>{
+    e.stopPropagation();
+    const prompt=document.createElement('div');
+    prompt.classList.add('curve-confirm');
+    prompt.style.left=(e.clientX+5)+'px'; prompt.style.top=(e.clientY+5)+'px';
+    prompt.innerHTML="Delete curve?<br><button id='ok'>OK</button><button id='cancel'>Cancel</button>";
+    document.body.appendChild(prompt);
+    path.classList.add('curve-highlight');
+    prompt.querySelector('#ok').onclick=()=>{ deleteCurve(curveObj); prompt.remove(); };
+    prompt.querySelector('#cancel').onclick=()=>{ path.classList.remove('curve-highlight'); prompt.remove(); };
+  });
+}
+
+// --------- drag curve ----------
+function startCurveDrag(e,node,color){
+  if(e.button!==0) return; e.stopPropagation();
+  const r=node.getBoundingClientRect();
+  const startX=r.left+r.width/2, startY=r.top+r.height/2;
+
+  const circle=document.createElement('div');
+  circle.classList.add('cursor-circle'); circle.style.background=color;
+  document.body.appendChild(circle);
+
+  const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+  path.setAttribute('stroke',color);
+  path.setAttribute('d',`M ${startX},${startY} L ${startX},${startY}`); // init safe
+  curveLayer.appendChild(path);
+
+  function update(e2){
+    circle.style.left=(e2.clientX-3)+'px'; circle.style.top=(e2.clientY-3)+'px';
+    drawCurve(path,startX,startY,e2.clientX,e2.clientY);
+  }
+  function end(e2){
+    document.removeEventListener('mousemove',update);
+    document.removeEventListener('mouseup',end);
+    circle.remove();
+
+    if(e2.target.classList.contains('node-top')){
+      const r2=e2.target.getBoundingClientRect();
+      const endX=r2.left+r2.width/2, endY=r2.top+r2.height/2;
+      drawCurve(path,startX,startY,endX,endY);
+
+      // gradient fade
+      const gradId="grad"+Math.random().toString(36).substr(2,9);
+      const grad=document.createElementNS("http://www.w3.org/2000/svg","linearGradient");
+      grad.setAttribute("id",gradId); grad.setAttribute("x1","0%"); grad.setAttribute("y1","0%"); grad.setAttribute("x2","100%"); grad.setAttribute("y2","0%");
+      const s1=document.createElementNS("http://www.w3.org/2000/svg","stop"); s1.setAttribute("offset","0%"); s1.setAttribute("stop-color","orange");
+      const s2=document.createElementNS("http://www.w3.org/2000/svg","stop"); s2.setAttribute("offset","100%"); s2.setAttribute("stop-color","orange");
+      grad.appendChild(s1); grad.appendChild(s2); gradDefs.appendChild(grad);
+      path.setAttribute("stroke",`url(#${gradId})`);
+
+      setTimeout(()=>{ s2.setAttribute("stop-color","white"); },50);
+
+      const curveObj={path,startNode:node,endNode:e2.target};
+      curves.push(curveObj); attachCurveEvents(curveObj);
+    } else path.remove();
+  }
+  document.addEventListener('mousemove',update);
+  document.addEventListener('mouseup',end);
+}
+
+// --------- block creation ----------
+function createBlock(wordText='WORD',numberText='',x=50,y=50){
+  const blockNumber=numberText||getNextNumber();
+  const block=document.createElement('div'); block.classList.add('block'); block.style.left=x+'px'; block.style.top=y+'px';
+  const number=document.createElement('div'); number.classList.add('number-part'); number.innerText=blockNumber;
+  const words=document.createElement('div'); words.classList.add('word-part'); words.innerText=wordText;
+  const doneBtn=document.createElement('div'); doneBtn.classList.add('done-btn'); doneBtn.innerText='Done';
+  const node=document.createElement('div'); node.classList.add('node');
+  const nodeTop=document.createElement('div'); nodeTop.classList.add('node-top');
+
+  block.append(number,words,doneBtn,node,nodeTop); canvas.appendChild(block);
+  registerNumber(blockNumber);
+
+  // block drag
+  let drag=false,offX,offY;
+  block.addEventListener('mousedown',e=>{ if(e.button!==2&&e.target!==doneBtn){ drag=true; offX=e.offsetX; offY=e.offsetY; block.style.cursor='grabbing'; }});
+  canvas.addEventListener('mousemove',e=>{ if(drag){ block.style.left=e.clientX-offX+'px'; block.style.top=e.clientY-offY+'px'; redrawCurves(); }});
+  document.addEventListener('mouseup',()=>{ drag=false; block.style.cursor='grab'; });
+
+  // word edit
+  doneBtn.onclick=e=>{e.stopPropagation(); words.contentEditable=false; doneBtn.style.display='none';};
+  block.querySelector('.word-part').ondblclick=()=>{doneBtn.style.display='inline'; words.contentEditable=true; words.focus();};
+
+  // number edit
+  let prev=number.innerText;
+  number.ondblclick=e=>{prev=number.innerText; number.contentEditable=true; number.focus();};
+  function finishNum(){ if(!number.isContentEditable) return; number.contentEditable=false;
+    const raw=number.innerText.trim(), n=Number(raw.replace(/[^\d]/g,'')), old=Number(prev);
+    if(!Number.isFinite(n)||raw===''){number.innerText=prev; return;}
+    deregisterNumber(old); if(usedNumbers.has(n)){number.innerText=getNextNumber();} else {number.innerText=n; registerNumber(n);} }
+  canvas.addEventListener('click',finishNum); number.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault(); finishNum();}};
+
+  // right menu
+  block.addEventListener('contextmenu',e=>{
+    e.preventDefault();
+    const menu=document.createElement('div'); menu.classList.add('option-menu');
+    menu.style.left=e.clientX+'px'; menu.style.top=e.clientY+'px';
+    menu.innerHTML='<div id="edit">Edit</div><div id="copy">Copy</div><div id="delete">Delete</div>';
+    document.body.appendChild(menu);
+    function rm(){menu.remove();document.removeEventListener('click',rm);} document.addEventListener('click',rm);
+    menu.querySelector('#edit').onclick=()=>{words.contentEditable=true;doneBtn.style.display='inline'; rm();};
+    menu.querySelector('#copy').onclick=()=>{copyBlockData={word:words.innerText}; rm();};
+    menu.querySelector('#delete').onclick=()=>{
+      curves.filter(c=>c.startNode===node||c.endNode===nodeTop).forEach(deleteCurve);
+      deregisterNumber(number.innerText); block.remove(); rm();
+    };
+  });
+
+  // curve from orange node
+  node.addEventListener('mousedown',e=>startCurveDrag(e,node,"orange"));
+}
+
+// canvas menu
+canvas.addEventListener('contextmenu',e=>{
+  if(e.target===canvas){
+    e.preventDefault();
+    const menu=document.createElement('div'); menu.classList.add('option-menu');
+    menu.style.left=e.clientX+'px'; menu.style.top=e.clientY+'px';
+    menu.innerHTML='<div id="paste">Paste</div><div id="cancel">Cancel</div>'; document.body.appendChild(menu);
+    function rm(){menu.remove();document.removeEventListener('click',rm);} document.addEventListener('click',rm);
+    menu.querySelector('#paste').onclick=()=>{if(copyBlockData) createBlock(copyBlockData.word,'',e.clientX,e.clientY); rm();};
+    menu.querySelector('#cancel').onclick=rm;
+  }
+});
+
+createBlock('BLOCK','',100,100);
+</script>
+</body>
+</html>
